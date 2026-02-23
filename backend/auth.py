@@ -1,5 +1,5 @@
-# backend/integration_auth.py
-# Complete standalone FastAPI application for integration token generation
+# backend/auth.py
+# CORRECTED VERSION with proper data extraction
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -9,20 +9,16 @@ from datetime import datetime, timedelta
 import uuid
 import requests
 
-# Create FastAPI app instance
 app = FastAPI(title="Integration Token API")
 
-# Get secret from environment variable
 JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET')
 
-# Request model
 class CredentialsRequest(BaseModel):
     email: str
     password: str
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
     return {
         "service": "OpenAnalyst Integration Token API",
         "status": "running",
@@ -31,26 +27,11 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check"""
     return {"status": "healthy"}
 
 @app.post("/api/auth/generate-integration-token")
 async def generate_integration_token(credentials: CredentialsRequest):
-    """
-    Generate JWT token for integration marketplace
-    
-    Request body:
-    {
-        "email": "user@example.com",
-        "password": "password123"
-    }
-    
-    Returns:
-    {
-        "token": "eyJhbGci...",
-        "integrations_url": "https://api.openanalyst.com/integrations/?token=..."
-    }
-    """
+    """Generate JWT token for integration marketplace"""
     
     try:
         # Step 1: Authenticate with OpenAnalyst
@@ -64,78 +45,86 @@ async def generate_integration_token(credentials: CredentialsRequest):
             }
         }
         
-        print(f"Authenticating user: {credentials.email}")
+        print(f"🔐 Authenticating user: {credentials.email}")
         
         response = requests.post(auth_url, json=auth_payload, timeout=10)
         
+        print(f"📡 Auth response status: {response.status_code}")
+        
         if response.status_code != 200:
-            print(f"Authentication failed: {response.status_code}")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid credentials"
-            )
+            print(f"❌ Authentication failed: {response.text}")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
         
         auth_data = response.json()
-        print(f"Authentication successful for: {credentials.email}")
         
-        # Step 2: Check if JWT secret is configured
+        # CRITICAL: Log what we got back
+        print(f"📦 Auth response data: {auth_data}")
+        
+        # Step 2: Extract user data with fallbacks
+        user_id = auth_data.get("userId") or auth_data.get("user_id") or auth_data.get("id")
+        org_id = auth_data.get("orgId") or auth_data.get("org_id") or auth_data.get("organizationId")
+        email = auth_data.get("email") or credentials.email
+        full_name = auth_data.get("fullName") or auth_data.get("full_name") or auth_data.get("name") or "User"
+        account_type = auth_data.get("accountType") or auth_data.get("account_type") or "individual"
+        
+        print(f"👤 Extracted data:")
+        print(f"   - userId: {user_id}")
+        print(f"   - orgId: {org_id}")
+        print(f"   - email: {email}")
+        print(f"   - fullName: {full_name}")
+        
+        # Step 3: Check JWT secret
         if not JWT_SECRET:
-            print("ERROR: INTEGRATION_MARKETPLACE_SECRET not set!")
-            raise HTTPException(
-                status_code=500,
-                detail="Server configuration error - secret key not found"
-            )
+            print("❌ INTEGRATION_MARKETPLACE_SECRET not set!")
+            raise HTTPException(status_code=500, detail="Server configuration error")
         
-        # Step 3: Generate JWT token
+        # Step 4: Generate JWT token
         exp_time = datetime.utcnow() + timedelta(minutes=30)
+        iat_time = datetime.utcnow()
         
         payload = {
-            "userId": auth_data.get("userId"),
-            "orgId": auth_data.get("orgId"),
-            "email": auth_data.get("email"),
-            "fullName": auth_data.get("fullName"),
-            "accountType": auth_data.get("accountType", "individual"),
-            "iat": datetime.utcnow(),
-            "exp": exp_time,
+            "userId": user_id,
+            "orgId": org_id,
+            "email": email,
+            "fullName": full_name,
+            "accountType": account_type,
+            "iat": int(iat_time.timestamp()),
+            "exp": int(exp_time.timestamp()),
             "jti": str(uuid.uuid4())
         }
         
+        print(f"📝 JWT payload: {payload}")
+        
         token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
         
-        print(f"JWT token generated successfully for: {credentials.email}")
+        print(f"✅ Token generated successfully!")
+        print(f"🔑 Token (first 50 chars): {token[:50]}...")
         
-        # Step 4: Return token
+        # Step 5: Return response
         return {
             "success": True,
             "token": token,
             "integrations_url": f"https://api.openanalyst.com/integrations/?token={token}",
             "user_data": {
-                "userId": auth_data.get("userId"),
-                "email": auth_data.get("email"),
-                "fullName": auth_data.get("fullName"),
-                "orgId": auth_data.get("orgId")
+                "userId": user_id,
+                "email": email,
+                "fullName": full_name,
+                "orgId": org_id
             }
         }
         
     except requests.exceptions.Timeout:
-        raise HTTPException(
-            status_code=504,
-            detail="Authentication service timeout"
-        )
+        print("⏱️ Request timeout")
+        raise HTTPException(status_code=504, detail="Authentication service timeout")
     except requests.exceptions.RequestException as e:
-        print(f"Request error: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail="Authentication service unavailable"
-        )
+        print(f"🌐 Network error: {str(e)}")
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        print(f"💥 Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
-# For local testing
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))

@@ -1,11 +1,10 @@
 # backend/auth.py
-# FINAL COMPLETE VERSION
-# 1. Authenticate user with email/password
-# 2. Get accessToken from OA Web
-# 3. Verify token with /me endpoint (with x-auth-source: desktop)
-# 4. Extract userId, orgId
-# 5. Generate integration JWT with marketplace secret
-# 6. Return ComposeIO link
+# COMPLETE FLOW WITH COMPOSEIO
+# 1. Authenticate user → Get accessToken
+# 2. Verify token with /me → Get userId/orgId
+# 3. Generate JWT with INTEGRATION_MARKETPLACE_SECRET
+# 4. Call ComposeIO to get connection link
+# 5. Return ComposeIO auth_url
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -19,19 +18,20 @@ app = FastAPI(title="Integration Token API")
 
 # Environment variables
 JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET')
-OA_WEB_URL = os.getenv('OA_WEB_URL', 'https://web.openanalyst.com')
+OA_WEB_URL = os.getenv('https://web.openanalyst.com')
+MCP_SERVER_URL = os.getenv('https://api.openanalyst.com/integrations')
 
 class CredentialsRequest(BaseModel):
     email: str
     password: str
-    provider: str = "gmail"  # gmail, slack, ga4, etc.
+    provider: str = "gmail"  # gmail, slack, google_analytics, googledocs
 
 @app.get("/")
 async def root():
     return {
         "service": "OpenAnalyst Integration Token API",
         "status": "running",
-        "version": "4.0.0 - Complete Flow"
+        "version": "5.0.0 - ComposeIO Integration"
     }
 
 @app.get("/health")
@@ -41,273 +41,222 @@ async def health():
 @app.post("/api/auth/generate-integration-token")
 async def generate_integration_token(credentials: CredentialsRequest):
     """
-    Complete authentication and integration token generation flow
+    Complete authentication and ComposeIO connection flow
     
     Steps:
-    1. Authenticate with OA Web using email/password
-    2. Get accessToken from authentication response
-    3. Verify token with /me endpoint (including x-auth-source header)
-    4. Extract userId, orgId, email
-    5. Generate new JWT signed with INTEGRATION_MARKETPLACE_SECRET
-    6. Return ComposeIO integration URL
+    1. Authenticate with OA Web
+    2. Verify token with /me endpoint
+    3. Generate JWT with marketplace secret
+    4. Call ComposeIO to get connection link
+    5. Return auth_url for user to connect provider
     
     Request:
     {
         "email": "user@example.com",
         "password": "password123",
-        "provider": "gmail"  // Optional: gmail, slack, ga4
+        "provider": "gmail"
     }
     
     Returns:
     {
         "success": true,
-        "integration_token": "eyJhbGci...",
-        "integrations_url": "https://api.openanalyst.com/integrations/?token=...",
+        "auth_url": "https://accounts.google.com/o/oauth2/auth?...",
+        "provider": "gmail",
         "user_data": {...}
     }
     """
     
     try:
         print(f"=" * 80)
-        print(f"🚀 Starting authentication flow for: {credentials.email}")
-        print(f"🎯 Provider: {credentials.provider}")
+        print(f"🚀 Starting ComposeIO connection flow")
+        print(f"   User: {credentials.email}")
+        print(f"   Provider: {credentials.provider}")
         print(f"=" * 80)
         
-        # ============================================================
+        # ================================================================
         # STEP 1: Authenticate with OA Web
-        # ============================================================
-        auth_url = f"{OA_WEB_URL}/api/v1/userAccount/authenticate"
+        # ================================================================
+        print(f"\n📍 STEP 1: Authenticating with OA Web")
         
+        auth_url = f"{OA_WEB_URL}/api/v1/userAccount/authenticate"
         auth_payload = {
             "email": credentials.email,
             "method": "password",
-            "credentials": {
-                "password": credentials.password
-            }
+            "credentials": {"password": credentials.password}
         }
-        
-        print(f"\n📍 STEP 1: Authenticating with OA Web")
-        print(f"   URL: {auth_url}")
         
         session = requests.Session()
         auth_response = session.post(auth_url, json=auth_payload, timeout=10)
         
-        print(f"   Response Status: {auth_response.status_code}")
-        
         if auth_response.status_code != 200:
             print(f"   ❌ Authentication failed!")
-            print(f"   Response: {auth_response.text}")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid email or password"
-            )
+            raise HTTPException(status_code=401, detail="Invalid email or password")
         
         auth_data = auth_response.json()
-        print(f"   ✅ Authentication successful!")
-        
-        # ============================================================
-        # STEP 2: Extract accessToken
-        # ============================================================
-        print(f"\n📍 STEP 2: Extracting accessToken")
-        
         access_token = auth_data.get("accessToken") or auth_data.get("access_token")
         
         if not access_token:
-            print(f"   ❌ No accessToken in response!")
-            print(f"   Available keys: {list(auth_data.keys())}")
-            raise HTTPException(
-                status_code=500,
-                detail="No access token in authentication response"
-            )
+            raise HTTPException(status_code=500, detail="No access token in response")
         
-        print(f"   ✅ Got accessToken: {access_token[:50]}...")
+        print(f"   ✅ Authentication successful!")
+        print(f"   Access token: {access_token[:50]}...")
         
-        # ============================================================
-        # STEP 3: Verify token with /me endpoint
-        # ============================================================
-        print(f"\n📍 STEP 3: Verifying token with /me endpoint")
+        # ================================================================
+        # STEP 2: Verify token with /me endpoint
+        # ================================================================
+        print(f"\n📍 STEP 2: Verifying token with /me endpoint")
         
         me_url = f"{OA_WEB_URL}/api/v1/userAccount/me"
-        
-        # IMPORTANT: Include x-auth-source header as per documentation
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "x-auth-source": "desktop",  # Required by OA Web
+            "x-auth-source": "desktop",
             "Content-Type": "application/json"
         }
         
-        print(f"   URL: {me_url}")
-        print(f"   Headers: Authorization: Bearer {access_token[:30]}...")
-        print(f"            x-auth-source: desktop")
-        
         me_response = session.get(me_url, headers=headers, timeout=10)
-        
-        print(f"   Response Status: {me_response.status_code}")
         
         if me_response.status_code != 200:
             print(f"   ❌ Token verification failed!")
-            print(f"   Response: {me_response.text}")
-            raise HTTPException(
-                status_code=500,
-                detail="Could not verify access token"
-            )
+            raise HTTPException(status_code=500, detail="Could not verify access token")
         
         user_data = me_response.json()
-        print(f"   ✅ Token verified! Got user data:")
-        print(f"      {user_data}")
         
-        # ============================================================
-        # STEP 4: Extract user information
-        # ============================================================
-        print(f"\n📍 STEP 4: Extracting user information")
-        
-        user_id = (
-            user_data.get("userId") or 
-            user_data.get("user_id") or 
-            user_data.get("id")
-        )
-        
-        org_id = (
-            user_data.get("orgId") or 
-            user_data.get("org_id") or
-            user_data.get("organizationId")
-        )
-        
+        user_id = user_data.get("userId") or user_data.get("user_id") or user_data.get("id")
+        org_id = user_data.get("orgId") or user_data.get("org_id")
         email = user_data.get("email") or credentials.email
+        full_name = user_data.get("fullName") or user_data.get("full_name") or "User"
         
-        full_name = (
-            user_data.get("fullName") or 
-            user_data.get("full_name") or 
-            user_data.get("name") or
-            "User"
-        )
-        
-        account_type = (
-            user_data.get("accountType") or 
-            user_data.get("account_type") or
-            "individual"
-        )
-        
-        print(f"   ✅ Extracted:")
-        print(f"      userId: {user_id}")
-        print(f"      orgId: {org_id}")
-        print(f"      email: {email}")
-        print(f"      fullName: {full_name}")
-        print(f"      accountType: {account_type}")
-        
-        # Validate required fields
         if not user_id:
-            print(f"   ❌ No userId found!")
-            raise HTTPException(
-                status_code=500,
-                detail="Could not retrieve user ID"
-            )
+            raise HTTPException(status_code=500, detail="Could not retrieve user ID")
         
-        # ============================================================
-        # STEP 5: Generate integration JWT
-        # ============================================================
-        print(f"\n📍 STEP 5: Generating integration JWT")
+        print(f"   ✅ Token verified!")
+        print(f"   User ID: {user_id}")
+        print(f"   Org ID: {org_id}")
+        print(f"   Email: {email}")
         
-        if not JWT_SECRET:
-            print(f"   ❌ INTEGRATION_MARKETPLACE_SECRET not set!")
-            raise HTTPException(
-                status_code=500,
-                detail="Server configuration error"
-            )
+        # ================================================================
+        # STEP 3: Generate JWT with marketplace secret
+        # ================================================================
+        print(f"\n📍 STEP 3: Generating JWT for ComposeIO")
         
-        exp_time = datetime.utcnow() + timedelta(minutes=30)
-        iat_time = datetime.utcnow()
+        # Generate JWT (60 second expiry as per docs)
+        iat_time = datetime.utcnow() - timedelta(seconds=5)  # Backdate for clock skew
+        exp_time = datetime.utcnow() + timedelta(seconds=60)  # 60 second expiry
         
-        payload = {
-            "userId": user_id,
-            "orgId": org_id,
+        jwt_payload = {
+            "user_id": user_id,
             "email": email,
-            "fullName": full_name,
-            "accountType": account_type,
             "iat": int(iat_time.timestamp()),
             "exp": int(exp_time.timestamp()),
-            "jti": str(uuid.uuid4())
+            "iss": "openanalyst-desktop"
         }
         
-        print(f"   Payload:")
-        for key, value in payload.items():
-            print(f"      {key}: {value}")
+        integration_jwt = pyjwt.encode(jwt_payload, JWT_SECRET, algorithm="HS256")
         
-        integration_token = pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
+        print(f"   ✅ JWT generated!")
+        print(f"   Token: {integration_jwt[:50]}...")
         
-        print(f"   ✅ Integration token generated!")
-        print(f"      Token: {integration_token[:50]}...")
+        # ================================================================
+        # STEP 4: Call ComposeIO to get connection link
+        # ================================================================
+        print(f"\n📍 STEP 4: Calling ComposeIO for connection link")
         
-        # ============================================================
-        # STEP 6: Build integration URLs
-        # ============================================================
-        print(f"\n📍 STEP 6: Building integration URLs")
+        composeio_url = f"{MCP_SERVER_URL}/api/integrations/connect"
         
-        base_url = f"https://api.openanalyst.com/integrations/?token={integration_token}"
-        
-        # Provider-specific URLs
-        provider_map = {
-            "gmail": "gmail",
-            "slack": "slack",
-            "ga4": "google-analytics",
-            "google_analytics": "google-analytics",
-            "bigquery": "bigquery"
+        composeio_headers = {
+            "Authorization": f"Bearer {integration_jwt}",
+            "Content-Type": "application/json"
         }
         
-        provider_slug = provider_map.get(credentials.provider.lower())
+        composeio_payload = {
+            "provider": credentials.provider,
+            "redirect_url": f"{OA_WEB_URL}/callback"
+        }
         
-        if provider_slug:
-            provider_url = f"https://api.openanalyst.com/integrations/{provider_slug}?token={integration_token}"
-        else:
-            provider_url = base_url
+        print(f"   URL: {composeio_url}")
+        print(f"   Provider: {credentials.provider}")
         
-        print(f"   ✅ URLs generated:")
-        print(f"      Base URL: {base_url}")
-        print(f"      Provider URL ({credentials.provider}): {provider_url}")
+        composeio_response = session.post(
+            composeio_url,
+            headers=composeio_headers,
+            json=composeio_payload,
+            timeout=10
+        )
         
-        # ============================================================
-        # STEP 7: Return response
-        # ============================================================
-        print(f"\n✅ SUCCESS! All steps completed.")
+        print(f"   Response status: {composeio_response.status_code}")
+        
+        if composeio_response.status_code != 200:
+            print(f"   ❌ ComposeIO request failed!")
+            print(f"   Response: {composeio_response.text}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get connection link from ComposeIO: {composeio_response.text}"
+            )
+        
+        composeio_data = composeio_response.json()
+        
+        # Check if already connected
+        if composeio_data.get("status") == "already_connected":
+            print(f"   ℹ️ User already connected to {credentials.provider}")
+            return {
+                "success": True,
+                "status": "already_connected",
+                "message": f"Your {credentials.provider} account is already connected!",
+                "provider": credentials.provider,
+                "user_data": {
+                    "userId": user_id,
+                    "email": email,
+                    "fullName": full_name,
+                    "orgId": org_id
+                }
+            }
+        
+        # Get auth_url
+        auth_url = composeio_data.get("auth_url")
+        
+        if not auth_url:
+            print(f"   ❌ No auth_url in ComposeIO response!")
+            print(f"   Response: {composeio_data}")
+            raise HTTPException(
+                status_code=500,
+                detail="ComposeIO did not return an auth URL"
+            )
+        
+        print(f"   ✅ Got ComposeIO connection link!")
+        print(f"   Auth URL: {auth_url[:80]}...")
+        
+        # ================================================================
+        # STEP 5: Return response
+        # ================================================================
+        print(f"\n✅ SUCCESS! Returning connection link to user")
         print(f"=" * 80)
         
         return {
             "success": True,
-            "integration_token": integration_token,
-            "integrations_url": base_url,
-            "provider_url": provider_url,
+            "auth_url": auth_url,
+            "provider": credentials.provider,
             "user_data": {
                 "userId": user_id,
                 "email": email,
                 "fullName": full_name,
-                "orgId": org_id,
-                "accountType": account_type
+                "orgId": org_id
             },
-            "provider": credentials.provider
+            "message": f"Click the auth_url to connect your {credentials.provider} account"
         }
         
     except requests.exceptions.Timeout:
         print(f"\n⏱️ Request timeout")
-        raise HTTPException(
-            status_code=504,
-            detail="OA Web service timeout"
-        )
+        raise HTTPException(status_code=504, detail="Service timeout")
     except requests.exceptions.RequestException as e:
         print(f"\n🌐 Network error: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail="OA Web service unavailable"
-        )
+        raise HTTPException(status_code=503, detail="Service unavailable")
     except HTTPException:
         raise
     except Exception as e:
         print(f"\n💥 Unexpected error: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

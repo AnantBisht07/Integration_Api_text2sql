@@ -1,5 +1,11 @@
 # backend/auth.py
-# ROBUST VERSION - Tries multiple methods to get userId and orgId
+# FINAL COMPLETE VERSION
+# 1. Authenticate user with email/password
+# 2. Get accessToken from OA Web
+# 3. Verify token with /me endpoint (with x-auth-source: desktop)
+# 4. Extract userId, orgId
+# 5. Generate integration JWT with marketplace secret
+# 6. Return ComposeIO link
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -11,101 +17,66 @@ import requests
 
 app = FastAPI(title="Integration Token API")
 
+# Environment variables
 JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET')
+OA_WEB_URL = os.getenv('OA_WEB_URL', 'https://web.openanalyst.com')
 
 class CredentialsRequest(BaseModel):
     email: str
     password: str
+    provider: str = "gmail"  # gmail, slack, ga4, etc.
 
 @app.get("/")
 async def root():
     return {
         "service": "OpenAnalyst Integration Token API",
         "status": "running",
-        "version": "1.0.0"
+        "version": "4.0.0 - Complete Flow"
     }
 
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
 
-def try_get_user_data(access_token, session):
-    """
-    Try multiple methods to get user data
-    Returns: dict with userId, orgId, email, fullName
-    """
-    
-    # Method 1: Try /me endpoint
-    print("📍 Method 1: Trying /api/v1/userAccount/me")
-    try:
-        me_response = session.get(
-            "https://web.openanalyst.com/api/v1/userAccount/me",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10
-        )
-        if me_response.status_code == 200:
-            data = me_response.json()
-            print(f"✅ /me endpoint worked! Data: {data}")
-            return data
-        else:
-            print(f"❌ /me endpoint failed: {me_response.status_code}")
-    except Exception as e:
-        print(f"❌ /me endpoint error: {e}")
-    
-    # Method 2: Try decoding the accessToken itself
-    print("📍 Method 2: Decoding accessToken JWT")
-    try:
-        # Decode without verification to see what's inside
-        decoded = pyjwt.decode(access_token, options={"verify_signature": False})
-        print(f"✅ Decoded accessToken: {decoded}")
-        
-        # Check if it has userId
-        if decoded.get("userId") or decoded.get("user_id") or decoded.get("id"):
-            print("✅ Found userId in accessToken!")
-            return decoded
-    except Exception as e:
-        print(f"❌ Token decode error: {e}")
-    
-    # Method 3: Try /users/me
-    print("📍 Method 3: Trying /api/v1/users/me")
-    try:
-        users_response = session.get(
-            "https://web.openanalyst.com/api/v1/users/me",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10
-        )
-        if users_response.status_code == 200:
-            data = users_response.json()
-            print(f"✅ /users/me worked! Data: {data}")
-            return data
-    except Exception as e:
-        print(f"❌ /users/me error: {e}")
-    
-    # Method 4: Try /user/profile
-    print("📍 Method 4: Trying /api/v1/user/profile")
-    try:
-        profile_response = session.get(
-            "https://web.openanalyst.com/api/v1/user/profile",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10
-        )
-        if profile_response.status_code == 200:
-            data = profile_response.json()
-            print(f"✅ /user/profile worked! Data: {data}")
-            return data
-    except Exception as e:
-        print(f"❌ /user/profile error: {e}")
-    
-    print("❌ All methods failed to get user data")
-    return None
-
 @app.post("/api/auth/generate-integration-token")
 async def generate_integration_token(credentials: CredentialsRequest):
-    """Generate JWT token for integration marketplace"""
+    """
+    Complete authentication and integration token generation flow
+    
+    Steps:
+    1. Authenticate with OA Web using email/password
+    2. Get accessToken from authentication response
+    3. Verify token with /me endpoint (including x-auth-source header)
+    4. Extract userId, orgId, email
+    5. Generate new JWT signed with INTEGRATION_MARKETPLACE_SECRET
+    6. Return ComposeIO integration URL
+    
+    Request:
+    {
+        "email": "user@example.com",
+        "password": "password123",
+        "provider": "gmail"  // Optional: gmail, slack, ga4
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "integration_token": "eyJhbGci...",
+        "integrations_url": "https://api.openanalyst.com/integrations/?token=...",
+        "user_data": {...}
+    }
+    """
     
     try:
-        # Step 1: Authenticate
-        auth_url = "https://web.openanalyst.com/api/v1/userAccount/authenticate"
+        print(f"=" * 80)
+        print(f"🚀 Starting authentication flow for: {credentials.email}")
+        print(f"🎯 Provider: {credentials.provider}")
+        print(f"=" * 80)
+        
+        # ============================================================
+        # STEP 1: Authenticate with OA Web
+        # ============================================================
+        auth_url = f"{OA_WEB_URL}/api/v1/userAccount/authenticate"
         
         auth_payload = {
             "email": credentials.email,
@@ -115,50 +86,91 @@ async def generate_integration_token(credentials: CredentialsRequest):
             }
         }
         
-        print(f"🔐 Authenticating user: {credentials.email}")
+        print(f"\n📍 STEP 1: Authenticating with OA Web")
+        print(f"   URL: {auth_url}")
         
         session = requests.Session()
         auth_response = session.post(auth_url, json=auth_payload, timeout=10)
         
+        print(f"   Response Status: {auth_response.status_code}")
+        
         if auth_response.status_code != 200:
-            print(f"❌ Authentication failed: {auth_response.text}")
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            print(f"   ❌ Authentication failed!")
+            print(f"   Response: {auth_response.text}")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password"
+            )
         
         auth_data = auth_response.json()
-        print(f"📦 Auth response keys: {auth_data.keys()}")
+        print(f"   ✅ Authentication successful!")
         
-        # Step 2: Get access token
+        # ============================================================
+        # STEP 2: Extract accessToken
+        # ============================================================
+        print(f"\n📍 STEP 2: Extracting accessToken")
+        
         access_token = auth_data.get("accessToken") or auth_data.get("access_token")
         
         if not access_token:
-            print(f"❌ No accessToken! Full response: {auth_data}")
-            raise HTTPException(status_code=500, detail="No access token in auth response")
+            print(f"   ❌ No accessToken in response!")
+            print(f"   Available keys: {list(auth_data.keys())}")
+            raise HTTPException(
+                status_code=500,
+                detail="No access token in authentication response"
+            )
         
-        print(f"🎫 Got access token: {access_token[:50]}...")
+        print(f"   ✅ Got accessToken: {access_token[:50]}...")
         
-        # Step 3: Try to get user data using multiple methods
-        user_data = try_get_user_data(access_token, session)
+        # ============================================================
+        # STEP 3: Verify token with /me endpoint
+        # ============================================================
+        print(f"\n📍 STEP 3: Verifying token with /me endpoint")
         
-        if not user_data:
-            # Fallback: use auth_data
-            print("⚠️ Using auth_data as fallback")
-            user_data = auth_data
+        me_url = f"{OA_WEB_URL}/api/v1/userAccount/me"
         
-        # Step 4: Extract fields with all possible variations
+        # IMPORTANT: Include x-auth-source header as per documentation
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "x-auth-source": "desktop",  # Required by OA Web
+            "Content-Type": "application/json"
+        }
+        
+        print(f"   URL: {me_url}")
+        print(f"   Headers: Authorization: Bearer {access_token[:30]}...")
+        print(f"            x-auth-source: desktop")
+        
+        me_response = session.get(me_url, headers=headers, timeout=10)
+        
+        print(f"   Response Status: {me_response.status_code}")
+        
+        if me_response.status_code != 200:
+            print(f"   ❌ Token verification failed!")
+            print(f"   Response: {me_response.text}")
+            raise HTTPException(
+                status_code=500,
+                detail="Could not verify access token"
+            )
+        
+        user_data = me_response.json()
+        print(f"   ✅ Token verified! Got user data:")
+        print(f"      {user_data}")
+        
+        # ============================================================
+        # STEP 4: Extract user information
+        # ============================================================
+        print(f"\n📍 STEP 4: Extracting user information")
+        
         user_id = (
             user_data.get("userId") or 
             user_data.get("user_id") or 
-            user_data.get("id") or
-            user_data.get("_id") or
-            user_data.get("sub")  # JWT standard claim
+            user_data.get("id")
         )
         
         org_id = (
             user_data.get("orgId") or 
-            user_data.get("org_id") or 
-            user_data.get("organizationId") or
-            user_data.get("organization_id") or
-            user_data.get("orgid")
+            user_data.get("org_id") or
+            user_data.get("organizationId")
         )
         
         email = user_data.get("email") or credentials.email
@@ -167,34 +179,41 @@ async def generate_integration_token(credentials: CredentialsRequest):
             user_data.get("fullName") or 
             user_data.get("full_name") or 
             user_data.get("name") or
-            user_data.get("displayName") or
             "User"
         )
         
         account_type = (
             user_data.get("accountType") or 
-            user_data.get("account_type") or 
+            user_data.get("account_type") or
             "individual"
         )
         
-        print(f"👤 Final extracted data:")
-        print(f"   - userId: {user_id}")
-        print(f"   - orgId: {org_id}")
-        print(f"   - email: {email}")
-        print(f"   - fullName: {full_name}")
+        print(f"   ✅ Extracted:")
+        print(f"      userId: {user_id}")
+        print(f"      orgId: {org_id}")
+        print(f"      email: {email}")
+        print(f"      fullName: {full_name}")
+        print(f"      accountType: {account_type}")
         
-        # Step 5: Validate
+        # Validate required fields
         if not user_id:
-            print("❌ CRITICAL: Could not find userId anywhere!")
-            print(f"📦 Available data: {user_data}")
+            print(f"   ❌ No userId found!")
             raise HTTPException(
-                status_code=500, 
-                detail="Could not retrieve user ID. Please contact support."
+                status_code=500,
+                detail="Could not retrieve user ID"
             )
         
-        # Step 6: Generate JWT
+        # ============================================================
+        # STEP 5: Generate integration JWT
+        # ============================================================
+        print(f"\n📍 STEP 5: Generating integration JWT")
+        
         if not JWT_SECRET:
-            raise HTTPException(status_code=500, detail="Server configuration error")
+            print(f"   ❌ INTEGRATION_MARKETPLACE_SECRET not set!")
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error"
+            )
         
         exp_time = datetime.utcnow() + timedelta(minutes=30)
         iat_time = datetime.utcnow()
@@ -210,31 +229,85 @@ async def generate_integration_token(credentials: CredentialsRequest):
             "jti": str(uuid.uuid4())
         }
         
-        print(f"📝 Final JWT payload: {payload}")
+        print(f"   Payload:")
+        for key, value in payload.items():
+            print(f"      {key}: {value}")
         
-        token = pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
+        integration_token = pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
         
-        print(f"✅ Token generated successfully!")
+        print(f"   ✅ Integration token generated!")
+        print(f"      Token: {integration_token[:50]}...")
+        
+        # ============================================================
+        # STEP 6: Build integration URLs
+        # ============================================================
+        print(f"\n📍 STEP 6: Building integration URLs")
+        
+        base_url = f"https://api.openanalyst.com/integrations/?token={integration_token}"
+        
+        # Provider-specific URLs
+        provider_map = {
+            "gmail": "gmail",
+            "slack": "slack",
+            "ga4": "google-analytics",
+            "google_analytics": "google-analytics",
+            "bigquery": "bigquery"
+        }
+        
+        provider_slug = provider_map.get(credentials.provider.lower())
+        
+        if provider_slug:
+            provider_url = f"https://api.openanalyst.com/integrations/{provider_slug}?token={integration_token}"
+        else:
+            provider_url = base_url
+        
+        print(f"   ✅ URLs generated:")
+        print(f"      Base URL: {base_url}")
+        print(f"      Provider URL ({credentials.provider}): {provider_url}")
+        
+        # ============================================================
+        # STEP 7: Return response
+        # ============================================================
+        print(f"\n✅ SUCCESS! All steps completed.")
+        print(f"=" * 80)
         
         return {
             "success": True,
-            "token": token,
-            "integrations_url": f"https://api.openanalyst.com/integrations/?token={token}",
+            "integration_token": integration_token,
+            "integrations_url": base_url,
+            "provider_url": provider_url,
             "user_data": {
                 "userId": user_id,
                 "email": email,
                 "fullName": full_name,
-                "orgId": org_id
-            }
+                "orgId": org_id,
+                "accountType": account_type
+            },
+            "provider": credentials.provider
         }
         
+    except requests.exceptions.Timeout:
+        print(f"\n⏱️ Request timeout")
+        raise HTTPException(
+            status_code=504,
+            detail="OA Web service timeout"
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"\n🌐 Network error: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail="OA Web service unavailable"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        print(f"💥 Error: {str(e)}")
+        print(f"\n💥 Unexpected error: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

@@ -17,7 +17,7 @@ import requests
 app = FastAPI(title="Integration Token API")
 
 # Environment variables
-JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET')
+JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET', 'OA2026IntegrationMarketplaceSecretKey9X7mP3nQ5wR8tY2jK6hL4vB1zN')
 OA_WEB_URL = os.getenv('OA_WEB_URL', 'https://web.openanalyst.com')
 MCP_SERVER_URL = os.getenv('MCP_SERVER_URL', 'https://api.openanalyst.com/integrations')
 
@@ -135,26 +135,11 @@ async def generate_integration_token(credentials: CredentialsRequest):
         print(f"   Email: {email}")
         
         # ================================================================
-        # STEP 3: Generate JWT with marketplace secret
+        # STEP 3: Use accessToken for ComposeIO (Mode 1 - Production)
         # ================================================================
-        print(f"\n📍 STEP 3: Generating JWT for ComposeIO")
-        
-        # Generate JWT (60 second expiry as per docs)
-        iat_time = datetime.utcnow() - timedelta(seconds=5)  # Backdate for clock skew
-        exp_time = datetime.utcnow() + timedelta(seconds=60)  # 60 second expiry
-        
-        jwt_payload = {
-            "user_id": user_id,
-            "email": email,
-            "iat": int(iat_time.timestamp()),
-            "exp": int(exp_time.timestamp()),
-            "iss": "openanalyst-desktop"
-        }
-        
-        integration_jwt = pyjwt.encode(jwt_payload, JWT_SECRET, algorithm="HS256")
-        
-        print(f"   ✅ JWT generated!")
-        print(f"   Token: {integration_jwt[:50]}...")
+        print(f"\n📍 STEP 3: Using accessToken for ComposeIO (Mode 1)")
+        print(f"   We'll use the OA Web accessToken directly")
+        print(f"   This is Mode 1 (Production) from ComposeIO docs")
         
         # ================================================================
         # STEP 4: Call ComposeIO to get connection link
@@ -163,8 +148,10 @@ async def generate_integration_token(credentials: CredentialsRequest):
         
         composeio_url = f"{MCP_SERVER_URL}/api/integrations/connect"
         
+        # Use the accessToken from OA Web (Mode 1)
         composeio_headers = {
-            "Authorization": f"Bearer {integration_jwt}",
+            "Authorization": f"Bearer {access_token}",
+            "x-auth-source": "desktop",
             "Content-Type": "application/json"
         }
         
@@ -241,7 +228,8 @@ async def generate_integration_token(credentials: CredentialsRequest):
                 "fullName": full_name,
                 "orgId": org_id
             },
-            "message": f"Click the auth_url to connect your {credentials.provider} account"
+            "message": f"Click the auth_url to connect your {credentials.provider} account",
+            "mode": "production_accessToken"  # Using Mode 1 from docs
         }
         
     except requests.exceptions.Timeout:

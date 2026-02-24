@@ -18,8 +18,8 @@ app = FastAPI(title="Integration Token API")
 
 # Environment variables
 JWT_SECRET = os.getenv('INTEGRATION_MARKETPLACE_SECRET')
-OA_WEB_URL = os.getenv('https://web.openanalyst.com')
-MCP_SERVER_URL = os.getenv('https://api.openanalyst.com/integrations')
+OA_WEB_URL = os.getenv('OA_WEB_URL', 'https://web.openanalyst.com')
+MCP_SERVER_URL = os.getenv('MCP_SERVER_URL', 'https://api.openanalyst.com/integrations')
 
 class CredentialsRequest(BaseModel):
     email: str

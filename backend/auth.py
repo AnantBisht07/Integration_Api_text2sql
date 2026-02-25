@@ -194,7 +194,8 @@ async def generate_integration_token(credentials: CredentialsRequest):
                     "userId": user_id,
                     "email": email,
                     "fullName": full_name,
-                    "orgId": org_id
+                    "orgId": org_id,
+                    "accessToken": access_token  # ← ADD THIS!
                 }
             }
         
@@ -226,7 +227,8 @@ async def generate_integration_token(credentials: CredentialsRequest):
                 "userId": user_id,
                 "email": email,
                 "fullName": full_name,
-                "orgId": org_id
+                "orgId": org_id,
+                "accessToken": access_token  # ← ADD THIS!
             },
             "message": f"Click the auth_url to connect your {credentials.provider} account",
             "mode": "production_accessToken"  # Using Mode 1 from docs

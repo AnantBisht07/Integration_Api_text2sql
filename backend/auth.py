@@ -184,12 +184,11 @@ async def generate_integration_token(credentials: CredentialsRequest):
         
         # Check if already connected
         if composeio_data.get("status") == "already_connected":
-            print(f"   ℹ️ User already connected to {credentials.provider}")
+            print(f"   ℹ️ User has existing connection to {credentials.provider}")
             
             # CRITICAL: Verify the connection actually works!
-            print(f"   🔍 Verifying connection is active...")
+            print(f"   🔍 Verifying connection is valid...")
             
-            # Test the connection with a simple API call
             verify_url = f"{MCP_SERVER_URL}/api/integrations/{credentials.provider}/status"
             verify_response = session.get(
                 verify_url,
@@ -200,22 +199,81 @@ async def generate_integration_token(credentials: CredentialsRequest):
             if verify_response.status_code == 200:
                 verify_data = verify_response.json()
                 
-                if verify_data.get("status") != "active":
-                    print(f"   ⚠️ Connection exists but is not active!")
-                    print(f"   Status: {verify_data.get('status')}")
+                # Check if connected_email is null (broken OAuth)
+                if verify_data.get("connected_email") is None:
+                    print(f"   ⚠️ Connection exists but OAuth was never completed!")
+                    print(f"   connected_email is NULL - forcing re-authorization")
+                    
+                    # Force disconnect and reconnect
+                    print(f"   🔄 Disconnecting broken connection...")
+                    
+                    disconnect_url = f"{MCP_SERVER_URL}/api/integrations/disconnect"
+                    disconnect_payload = {"provider": credentials.provider}
+                    
+                    disconnect_response = session.post(
+                        disconnect_url,
+                        headers=composeio_headers,
+                        json=disconnect_payload,
+                        timeout=10
+                    )
+                    
+                    print(f"   Disconnect status: {disconnect_response.status_code}")
+                    
+                    # Now try connect again to get auth_url
+                    print(f"   🔗 Getting fresh OAuth URL...")
+                    
+                    composeio_response = session.post(
+                        composeio_url,
+                        headers=composeio_headers,
+                        json=composeio_payload,
+                        timeout=10
+                    )
+                    
+                    if composeio_response.status_code == 200:
+                        fresh_data = composeio_response.json()
+                        auth_url = fresh_data.get("auth_url")
+                        
+                        if auth_url:
+                            print(f"   ✅ Got fresh OAuth URL!")
+                            
+                            return {
+                                "success": True,
+                                "status": "needs_oauth",
+                                "auth_url": auth_url,
+                                "provider": credentials.provider,
+                                "user_data": {
+                                    "userId": user_id,
+                                    "email": email,
+                                    "fullName": full_name,
+                                    "orgId": org_id,
+                                    "accessToken": access_token
+                                },
+                                "message": f"Please click auth_url to authorize your {credentials.provider} account"
+                            }
+                
+                # Connection is valid
+                if verify_data.get("status") == "active" and verify_data.get("connected_email"):
+                    print(f"   ✅ Connection verified and active!")
+                    print(f"   Connected email: {verify_data.get('connected_email')}")
                     
                     return {
-                        "success": False,
-                        "status": "connection_inactive",
-                        "message": f"Your {credentials.provider} connection is inactive. Please reconnect.",
+                        "success": True,
+                        "status": "already_connected",
+                        "message": f"Your {credentials.provider} account is already connected!",
                         "provider": credentials.provider,
-                        "details": verify_data
+                        "user_data": {
+                            "userId": user_id,
+                            "email": email,
+                            "fullName": full_name,
+                            "orgId": org_id,
+                            "accessToken": access_token
+                        },
+                        "connection_details": verify_data
                     }
-            else:
-                print(f"   ⚠️ Could not verify connection status")
+                else:
+                    print(f"   ⚠️ Connection status: {verify_data.get('status')}")
             
-            print(f"   ✅ Connection verified and active!")
-            
+            # Fallback: return already_connected anyway
             return {
                 "success": True,
                 "status": "already_connected",
@@ -226,7 +284,7 @@ async def generate_integration_token(credentials: CredentialsRequest):
                     "email": email,
                     "fullName": full_name,
                     "orgId": org_id,
-                    "accessToken": access_token  # ← This token works!
+                    "accessToken": access_token
                 }
             }
         
@@ -274,7 +332,7 @@ async def generate_integration_token(credentials: CredentialsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"\n💥 Unexpected error: {str(e)}")
+        print(f"\n💥 Unexpected errorr: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

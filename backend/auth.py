@@ -185,6 +185,37 @@ async def generate_integration_token(credentials: CredentialsRequest):
         # Check if already connected
         if composeio_data.get("status") == "already_connected":
             print(f"   ℹ️ User already connected to {credentials.provider}")
+            
+            # CRITICAL: Verify the connection actually works!
+            print(f"   🔍 Verifying connection is active...")
+            
+            # Test the connection with a simple API call
+            verify_url = f"{MCP_SERVER_URL}/api/integrations/{credentials.provider}/status"
+            verify_response = session.get(
+                verify_url,
+                headers=composeio_headers,
+                timeout=10
+            )
+            
+            if verify_response.status_code == 200:
+                verify_data = verify_response.json()
+                
+                if verify_data.get("status") != "active":
+                    print(f"   ⚠️ Connection exists but is not active!")
+                    print(f"   Status: {verify_data.get('status')}")
+                    
+                    return {
+                        "success": False,
+                        "status": "connection_inactive",
+                        "message": f"Your {credentials.provider} connection is inactive. Please reconnect.",
+                        "provider": credentials.provider,
+                        "details": verify_data
+                    }
+            else:
+                print(f"   ⚠️ Could not verify connection status")
+            
+            print(f"   ✅ Connection verified and active!")
+            
             return {
                 "success": True,
                 "status": "already_connected",
@@ -195,7 +226,7 @@ async def generate_integration_token(credentials: CredentialsRequest):
                     "email": email,
                     "fullName": full_name,
                     "orgId": org_id,
-                    "accessToken": access_token  # ← ADD THIS!
+                    "accessToken": access_token  # ← This token works!
                 }
             }
         
